@@ -388,6 +388,19 @@ impl App {
             .client_frame_dir
             .as_deref()
             .is_some_and(|dir| crate::pane_graphics_files::path_is_inside(frame_path, dir));
+        if client_local && !direct {
+            // The direct path is briefly closed while the previous frame is still
+            // being acknowledged. A frame from the client has no inline fallback --
+            // this process cannot read it -- so drop this one and let the producer
+            // send the next, rather than failing the stream over a passing state.
+            return encode_success(
+                id,
+                ResponseResult::PaneGraphicsFrameAck {
+                    sequence: params.sequence,
+                    revision: params.revision,
+                },
+            );
+        }
         if client_local {
             tracing::info!(
                 pane = %params.pane_id,
