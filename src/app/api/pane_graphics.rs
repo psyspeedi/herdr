@@ -342,6 +342,14 @@ impl App {
             .client_frame_dir
             .as_deref()
             .is_some_and(|dir| crate::pane_graphics_files::path_is_inside(frame_path, dir));
+        if client_local {
+            tracing::debug!(
+                pane = %params.pane_id,
+                path = %params.path,
+                len = expected_len,
+                "frame file taken from the client's own directory"
+            );
+        }
         let lease = if client_local {
             // The file sits on the client's machine. Containment inside the
             // directory that client declared is the only check available here;
