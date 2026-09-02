@@ -734,6 +734,28 @@ fn direct_graphics_profile_values(
     supported && !blocked_transport && terminals
 }
 
+/// Checks a frame file the server offered, by whichever layout it belongs to.
+///
+/// Frames produced beside this client live in the directory it announced, which
+/// has none of the server's `server-*/source` structure; anything else must be
+/// the server's own file and is held to the original rules.
+#[cfg(unix)]
+fn validate_frame_source(path: &std::path::Path, expected_len: usize) -> std::io::Result<()> {
+    if let Some(directory) = CLIENT_FRAME_DIR.get() {
+        if path.parent() == Some(directory.as_path()) {
+            return crate::pane_graphics_files::validate_client_frame_source(
+                path,
+                directory,
+                expected_len,
+            );
+        }
+    }
+    crate::pane_graphics_files::validate_direct_source(path, expected_len)
+}
+
+/// Directory this client announced to the server, once it has created one.
+static CLIENT_FRAME_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
 /// Directory this client offers to frame producers running beside it.
 ///
 /// Returns `None` unless `HERDR_CLIENT_FRAMES` is set, so the default path
@@ -755,7 +777,11 @@ fn client_frame_directory() -> Option<String> {
         return None;
     }
     match crate::pane_graphics_files::create_client_frame_directory() {
-        Ok(path) => Some(path.to_string_lossy().into_owned()),
+        Ok(path) => {
+            let announced = path.to_string_lossy().into_owned();
+            let _ = CLIENT_FRAME_DIR.set(path);
+            Some(announced)
+        }
         Err(err) => {
             tracing::warn!(err = %err, "failed to create client frame directory");
             None
@@ -1777,17 +1803,28 @@ async fn run_client_loop(
                         }
                         let valid = state.kitty_graphics_enabled
                             && usize::try_from(expected_len).ok().is_some_and(|len| {
-                                crate::pane_graphics_files::validate_direct_source(
-                                    std::path::Path::new(&path),
-                                    len,
-                                )
-                                .is_ok()
+                                validate_frame_source(std::path::Path::new(&path), len).is_ok()
                                     && direct_graphics::valid_control(&control, image_id, len)
                             })
                             && state
                                 .direct_graphics_response
                                 .lock()
                                 .is_ok_and(|mut matcher| matcher.arm(transfer_id, image_id));
+                        if !valid {
+                            tracing::warn!(
+                                path = %path,
+                                expected_len,
+                                image_id,
+                                kitty = state.kitty_graphics_enabled,
+                                why = %validate_frame_source(
+                                    std::path::Path::new(&path),
+                                    usize::try_from(expected_len).unwrap_or(0),
+                                )
+                                .map_or_else(|err| err.to_string(), |()| "file ok".to_owned()),
+                                control = %control,
+                                "rejected a direct frame file"
+                            );
+                        }
                         let sent = if valid {
                             let mut command = Vec::new();
                             crate::kitty_graphics::encode_kitty_regular_file(

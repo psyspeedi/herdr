@@ -188,6 +188,8 @@ pub enum Method {
     #[serde(skip)]
     #[schemars(skip)]
     PaneGraphicsStreamDirect(PaneGraphicsDirectParams),
+    #[serde(rename = "pane.graphics.client_frames")]
+    PaneGraphicsClientFrames(PaneGraphicsClientFramesParams),
     #[serde(skip)]
     #[schemars(skip)]
     PaneGraphicsStreamOpen(PaneGraphicsStreamParams),

@@ -1594,6 +1594,9 @@ impl HeadlessServer {
                         // files itself, so the transport restrictions that gate
                         // `direct_graphics` do not apply to it: nothing about the
                         // path has to be reachable from this machine.
+                        // A client that renders frames itself is eligible even when
+                        // its transport profile forbids the server's own files: the
+                        // per-pane check decides which panes actually use that path.
                         && (client.direct_graphics || client.local_frame_dir.is_some())
                 })
             })

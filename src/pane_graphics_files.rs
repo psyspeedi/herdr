@@ -201,6 +201,39 @@ pub(crate) fn validate_direct_source(path: &Path, expected_len: usize) -> io::Re
     validate_path_identity(path, &metadata)
 }
 
+/// Validates a frame file that this client itself offered a directory for.
+///
+/// [`validate_direct_source`] recognises only the server's own layout
+/// (`<runtime>/server-*/source/<file>`), which a client rendering locally
+/// cannot produce. The guarantees that matter are the same either way: the file
+/// sits directly in the private directory this client created, and it is a
+/// same-uid regular 0600 single-link file of exactly the expected length.
+#[cfg(unix)]
+pub(crate) fn validate_client_frame_source(
+    path: &Path,
+    directory: &Path,
+    expected_len: usize,
+) -> io::Result<()> {
+    validate_child(path, directory)?;
+    validate_directory(directory)?;
+    let file = open_no_follow(path)?;
+    let metadata = file.metadata()?;
+    validate_metadata(&metadata, expected_len)?;
+    validate_path_identity(path, &metadata)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn validate_client_frame_source(
+    _path: &Path,
+    _directory: &Path,
+    _expected_len: usize,
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "client frame files require Unix",
+    ))
+}
+
 fn create_generation(base: &Path) -> io::Result<Generation> {
     #[cfg(not(unix))]
     {

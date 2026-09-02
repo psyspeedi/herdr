@@ -352,6 +352,14 @@ pub struct PaneGraphicsDirectParams {
     pub placement: PaneGraphicsPlacementParams,
 }
 
+/// Marks a pane whose frames are produced beside the attached client.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneGraphicsClientFramesParams {
+    pub pane_id: String,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneGraphicsStreamParams {
     pub pane_id: String,

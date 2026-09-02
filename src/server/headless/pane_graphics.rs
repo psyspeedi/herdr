@@ -109,7 +109,14 @@ impl HeadlessServer {
                                 RenderImpact::Graphics
                             };
                         }
+                        // The producer is still waiting: dropping the response
+                        // here leaves it blocked until its channel closes. A frame
+                        // whose file lives on the client can never fall back to an
+                        // inline copy, because this process cannot read it, so this
+                        // path is the normal outcome for such a frame rather than a
+                        // rare failure.
                         self.retire_direct_gate(&key);
+                        let _ = msg.respond_to.send(response);
                         return if internal_changed {
                             RenderImpact::Full
                         } else {

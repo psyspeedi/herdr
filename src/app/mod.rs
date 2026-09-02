@@ -102,6 +102,12 @@ pub struct App {
     pub(crate) pane_graphics: pane_graphics::Runtime,
     pub(crate) pane_graphics_files: Arc<crate::pane_graphics_files::FileStore>,
     pub(crate) direct_graphics_available: bool,
+    /// Panes whose frames are produced beside the client rather than here.
+    ///
+    /// Only these are handed the client's frame directory: a producer running on
+    /// this machine could not write there, and offering it one would break the
+    /// path it was using before.
+    pub(crate) client_frame_panes: std::collections::HashSet<crate::layout::PaneId>,
     /// Frame directory offered by the foreground client, when it renders locally.
     ///
     /// Producers are handed this path instead of the server's own directory, so
@@ -752,6 +758,7 @@ impl App {
             pane_graphics: pane_graphics::Runtime::default(),
             pane_graphics_files: Arc::new(crate::pane_graphics_files::FileStore::default()),
             direct_graphics_available: false,
+            client_frame_panes: std::collections::HashSet::new(),
             client_frame_dir: None,
             pixel_mouse_available: false,
             terminal_runtimes: restored_terminal_runtimes,

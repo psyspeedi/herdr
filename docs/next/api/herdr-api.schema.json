@@ -2468,6 +2468,22 @@
           ],
           "type": "object"
         },
+        "PaneGraphicsClientFramesParams": {
+          "description": "Marks a pane whose frames are produced beside the attached client.",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id"
+          ],
+          "type": "object"
+        },
         "PaneGraphicsFormat": {
           "enum": [
             "png",
@@ -5507,6 +5523,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PaneTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.graphics.client_frames",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneGraphicsClientFramesParams"
             }
           },
           "required": [

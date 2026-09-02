@@ -31,6 +31,46 @@ impl App {
         }
     }
 
+    /// Marks whether a pane's frames are produced beside the attached client.
+    ///
+    /// Only a marked pane is handed the client's frame directory; everything
+    /// else keeps using this machine's own, because a producer running here
+    /// cannot write to a directory that lives on the client.
+    /// Whether this pane may use the file transport, and with whose directory.
+    ///
+    /// A client that shares this filesystem can read the server's own frame
+    /// files. A remote client can only read files it produced itself, so the
+    /// transport is offered solely to panes marked as client-rendered; every
+    /// other pane keeps the inline path it used before.
+    fn direct_for_pane(&self, pane_id: crate::layout::PaneId) -> bool {
+        if !self.direct_graphics_available {
+            return false;
+        }
+        if self.client_frame_dir.is_some() {
+            return self.client_frame_panes.contains(&pane_id);
+        }
+        true
+    }
+
+    pub(super) fn handle_pane_graphics_client_frames(
+        &mut self,
+        id: String,
+        params: crate::api::schema::PaneGraphicsClientFramesParams,
+    ) -> String {
+        if let Err(response) = require_enabled(self, &id) {
+            return response;
+        }
+        let Some((_, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+            return pane_not_found(id, &params.pane_id);
+        };
+        if params.enabled {
+            self.client_frame_panes.insert(pane_id);
+        } else {
+            self.client_frame_panes.remove(&pane_id);
+        }
+        encode_success(id, ResponseResult::Ok {})
+    }
+
     pub(super) fn handle_pane_graphics_info(
         &mut self,
         id: String,
@@ -49,11 +89,17 @@ impl App {
         // A locally rendering client owns the directory producers write into, so
         // its frames land on the machine whose terminal reads them. Fall back to
         // this process's own directory for a client that shares its filesystem.
-        let file_frame_directory = self.direct_graphics_available.then(|| {
-            self.client_frame_dir
-                .clone()
-                .or_else(|| self.pane_graphics_files.source_directory().ok())
-        }).flatten();
+        let client_rendered = self.client_frame_panes.contains(&pane_id);
+        let file_frame_directory = self
+            .direct_for_pane(pane_id)
+            .then(|| {
+                if client_rendered {
+                    self.client_frame_dir.clone()
+                } else {
+                    self.pane_graphics_files.source_directory().ok()
+                }
+            })
+            .flatten();
         let direct = file_frame_directory.is_some();
         encode_success(
             id,
@@ -324,7 +370,7 @@ impl App {
             return encode_error(id, "invalid_image", "direct frames require rgba or bgra");
         }
         let primary = key.1 == PANE_GRAPHICS_PRIMARY_LAYER_ID;
-        let direct = self.direct_graphics_available
+        let direct = self.direct_for_pane(pane_id)
             && primary
             && params.format == crate::api::schema::PaneGraphicsFormat::Rgba;
         let max_bytes = if direct {
@@ -343,7 +389,7 @@ impl App {
             .as_deref()
             .is_some_and(|dir| crate::pane_graphics_files::path_is_inside(frame_path, dir));
         if client_local {
-            tracing::debug!(
+            tracing::info!(
                 pane = %params.pane_id,
                 path = %params.path,
                 len = expected_len,

@@ -452,6 +452,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::PaneGraphicsStream(_) => "pane.graphics.stream",
         Method::PaneGraphicsStreamSet(_) => "pane.graphics.stream.set",
         Method::PaneGraphicsStreamDirect(_) => "pane.graphics.stream.direct",
+        Method::PaneGraphicsClientFrames(_) => "pane.graphics.client_frames",
         Method::PaneGraphicsStreamOpen(_) => "pane.graphics.stream.open",
         Method::PaneGraphicsStreamClose(_) => "pane.graphics.stream.close",
         Method::PaneReportAgent(_) => "pane.report_agent",
