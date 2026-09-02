@@ -46,10 +46,14 @@ impl App {
         if !self.state.host_cell_size.is_known() {
             return encode_error(id, "cell_size_unavailable", "host cell size is unavailable");
         }
-        let file_frame_directory = self
-            .direct_graphics_available
-            .then(|| self.pane_graphics_files.source_directory().ok())
-            .flatten();
+        // A locally rendering client owns the directory producers write into, so
+        // its frames land on the machine whose terminal reads them. Fall back to
+        // this process's own directory for a client that shares its filesystem.
+        let file_frame_directory = self.direct_graphics_available.then(|| {
+            self.client_frame_dir
+                .clone()
+                .or_else(|| self.pane_graphics_files.source_directory().ok())
+        }).flatten();
         let direct = file_frame_directory.is_some();
         encode_success(
             id,
@@ -333,12 +337,23 @@ impl App {
                 Ok(Some(len)) if len <= max_bytes => len,
                 _ => return encode_error(id, "invalid_image", "invalid direct RGBA dimensions"),
             };
-        let lease = match self
-            .pane_graphics_files
-            .lease(std::path::Path::new(&params.path), expected_len)
-        {
-            Ok(lease) => lease,
-            Err(err) => return encode_error(id, "invalid_frame_file", err.to_string()),
+        let frame_path = std::path::Path::new(&params.path);
+        let client_local = self
+            .client_frame_dir
+            .as_deref()
+            .is_some_and(|dir| crate::pane_graphics_files::path_is_inside(frame_path, dir));
+        let lease = if client_local {
+            // The file sits on the client's machine. Containment inside the
+            // directory that client declared is the only check available here;
+            // the client re-validates size and identity before it hands the path
+            // to its terminal.
+            self.pane_graphics_files
+                .lease_client_local(frame_path, expected_len)
+        } else {
+            match self.pane_graphics_files.lease(frame_path, expected_len) {
+                Ok(lease) => lease,
+                Err(err) => return encode_error(id, "invalid_frame_file", err.to_string()),
+            }
         };
         if !direct && !self.pane_graphics.can_store_inline(&key, expected_len) {
             return encode_error(

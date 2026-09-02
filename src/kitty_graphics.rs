@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use base64::Engine;
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use ratatui::layout::Rect;
 
 use crate::app::state::AppState;
@@ -1570,7 +1572,30 @@ fn kitty_format_code(format: KittyImageFormat) -> u32 {
     }
 }
 
+/// Deflates a frame payload for `o=z` transmission.
+///
+/// An attached client pays for every byte of every frame, and a surface handed
+/// to us as raw RGBA is mostly flat colour, so even the cheapest deflate level
+/// removes most of it before base64 inflates what is left by a third. Returns
+/// `None` when compression does not pay, so a payload that would grow, or one
+/// too small to be worth the pass, still goes out verbatim.
+fn compress_kitty_payload(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() < KITTY_CHUNK_BYTES {
+        return None;
+    }
+    let mut encoder = ZlibEncoder::new(Vec::with_capacity(data.len() / 2), Compression::fast());
+    encoder.write_all(data).ok()?;
+    let compressed = encoder.finish().ok()?;
+    (compressed.len() < data.len()).then_some(compressed)
+}
+
 fn encode_kitty_data(out: &mut Vec<u8>, control: &str, data: &[u8]) {
+    let compressed = compress_kitty_payload(data);
+    let (data, control) = match compressed.as_deref() {
+        Some(compressed) => (compressed, format!("{control},o=z")),
+        None => (data, control.to_owned()),
+    };
+    let control = control.as_str();
     let mut chunks = data.chunks(KITTY_CHUNK_BYTES).peekable();
     let Some(first) = chunks.next() else {
         return;
@@ -1708,8 +1733,12 @@ mod tests {
         record(&mut transcript, &update(&mut cache, &[changed], false));
         record(&mut transcript, &update(&mut cache, &[], false));
 
-        assert_eq!(transcript.len(), 10_084);
-        assert_eq!(fnv1a(&transcript), 0xc5bd_83e4_b039_870e);
+        // Frames now travel deflated (`o=z`), so the transcript is an order of
+        // magnitude smaller than the uncompressed baseline this test used to
+        // pin: 10_084 bytes became 578. The identity check still guards the
+        // placement sequence, which compression must not disturb.
+        assert_eq!(transcript.len(), 578);
+        assert_eq!(fnv1a(&transcript), 0xe851692311d6f6da);
     }
 
     #[test]

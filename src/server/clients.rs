@@ -71,6 +71,12 @@ pub(crate) struct ClientConnection {
     pub(crate) host_keyboard_report_all_active: Option<bool>,
     /// Temporary files staged from this client's local clipboard image pastes.
     pub(crate) staged_clipboard_files: Vec<PathBuf>,
+    /// Directory on the client's machine that frame producers may write frames to.
+    ///
+    /// When set, a producer's frame file is never opened here: this process only
+    /// checks that the path sits inside this directory and forwards it, so a
+    /// remote session carries frame paths instead of frame pixels.
+    pub(crate) local_frame_dir: Option<PathBuf>,
     /// Channels for sending framed ServerMessage data to the client writer thread.
     pub(crate) writer: Option<ClientWriter>,
 }
@@ -134,6 +140,7 @@ impl ClientConnection {
             render_pending: false,
             host_mouse_capture_active: None,
             host_sgr_pixels_active: None,
+            local_frame_dir: None,
             host_keyboard_report_all_active: None,
             staged_clipboard_files: Vec::new(),
             writer,

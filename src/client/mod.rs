@@ -734,6 +734,35 @@ fn direct_graphics_profile_values(
     supported && !blocked_transport && terminals
 }
 
+/// Directory this client offers to frame producers running beside it.
+///
+/// Returns `None` unless `HERDR_CLIENT_FRAMES` is set, so the default path
+/// through the server is untouched. The terminal has to be able to read the
+/// files back, which is the same capability the local direct-graphics profile
+/// already checks for, minus its transport restrictions: a file written next to
+/// this client is readable by this client's terminal however the session got here.
+fn client_frame_directory() -> Option<String> {
+    if !std::env::var_os("HERDR_CLIENT_FRAMES").is_some_and(|value| value != "0") {
+        return None;
+    }
+    let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+    let term = std::env::var("TERM").unwrap_or_default();
+    let terminal_reads_files = term_program.eq_ignore_ascii_case("ghostty")
+        || term_program.eq_ignore_ascii_case("wezterm")
+        || matches!(term.as_str(), "xterm-ghostty" | "xterm-kitty" | "xterm-wezterm")
+        || std::env::var_os("KITTY_WINDOW_ID").is_some();
+    if !terminal_reads_files {
+        return None;
+    }
+    match crate::pane_graphics_files::create_client_frame_directory() {
+        Ok(path) => Some(path.to_string_lossy().into_owned()),
+        Err(err) => {
+            tracing::warn!(err = %err, "failed to create client frame directory");
+            None
+        }
+    }
+}
+
 #[cfg(unix)]
 fn direct_graphics_profile_allowed(direct_attach: bool) -> bool {
     let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
@@ -853,6 +882,16 @@ fn do_handshake(
     };
     protocol::write_message(stream, &hello)
         .map_err(|e| ClientError::ConnectionFailed(io::Error::other(e.to_string())))?;
+
+    // A locally rendering client offers producers a directory on its own machine,
+    // so the server can forward frame paths instead of frame pixels. Sent after
+    // the handshake as its own message, which keeps older servers and clients on
+    // the existing path untouched.
+    if let Some(path) = client_frame_directory() {
+        let message = ClientMessage::LocalFrameDirectory { path };
+        protocol::write_message(stream, &message)
+            .map_err(|e| ClientError::ConnectionFailed(io::Error::other(e.to_string())))?;
+    }
 
     // Read Welcome.
     set_handshake_recv_timeout(

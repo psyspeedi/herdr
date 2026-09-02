@@ -102,6 +102,11 @@ pub struct App {
     pub(crate) pane_graphics: pane_graphics::Runtime,
     pub(crate) pane_graphics_files: Arc<crate::pane_graphics_files::FileStore>,
     pub(crate) direct_graphics_available: bool,
+    /// Frame directory offered by the foreground client, when it renders locally.
+    ///
+    /// Producers are handed this path instead of the server's own directory, so
+    /// their frames land beside the terminal that will read them.
+    pub(crate) client_frame_dir: Option<std::path::PathBuf>,
     pub(crate) pixel_mouse_available: bool,
     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
     pub event_tx: mpsc::Sender<AppEvent>,
@@ -747,6 +752,7 @@ impl App {
             pane_graphics: pane_graphics::Runtime::default(),
             pane_graphics_files: Arc::new(crate::pane_graphics_files::FileStore::default()),
             direct_graphics_available: false,
+            client_frame_dir: None,
             pixel_mouse_available: false,
             terminal_runtimes: restored_terminal_runtimes,
             event_tx,

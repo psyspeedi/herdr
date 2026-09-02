@@ -320,6 +320,8 @@ pub(crate) enum ServerEvent {
     },
     /// A client sent an input message.
     ClientInput { client_id: u64, data: Vec<u8> },
+    /// A client declared a directory on its machine for producer frame files.
+    ClientLocalFrameDirectory { client_id: u64, path: String },
     /// A client reported the one armed Kitty regular-file response.
     GraphicsTransmissionResult {
         client_id: u64,
@@ -970,6 +972,9 @@ fn client_read_loop(
                 row,
                 modifiers,
             },
+            ClientMessage::LocalFrameDirectory { path } => {
+                ServerEvent::ClientLocalFrameDirectory { client_id, path }
+            }
             ClientMessage::Hello { .. } => {
                 // Duplicate Hello — ignore.
                 continue;

@@ -449,6 +449,16 @@ pub enum ClientMessage {
 
     /// The direct command was written and flushed; terminal response timing starts now.
     GraphicsTransmissionStarted { transfer_id: u64, image_id: u32 },
+
+    /// Directory on this client's machine that frame producers may write into.
+    ///
+    /// Sent once after the handshake by a client that renders locally, so the
+    /// server can hand producers a path whose files the client's own terminal
+    /// can read. Older clients never send it and keep the pixel path.
+    LocalFrameDirectory {
+        /// Absolute path to a private directory owned by this client.
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -226,7 +226,7 @@ fn direct_stream_message(
 }
 
 #[tokio::test]
-async fn pixel_mouse_activation_requires_graphics_demand_not_direct_transport() {
+async fn pixel_mouse_activation_follows_the_app_not_graphics_demand() {
     let (mut server, _client_rx, pane_id) =
         retained_test_server(b"\x1b[?1003h\x1b[?1006h\x1b[?1016h");
     let (writer, control_rx, _render_rx) = test_client_writer();
@@ -238,16 +238,11 @@ async fn pixel_mouse_activation_requires_graphics_demand_not_direct_transport() 
     client.host_sgr_pixels_active = None;
     server.app.direct_graphics_available = false;
 
-    server.stream_host_mouse_capture_mode();
-    assert!(matches!(
-        read_server_message(control_rx.recv_timeout(Duration::from_millis(100)).unwrap()),
-        ServerMessage::MouseCapture {
-            enabled: true,
-            sgr_pixels: false
-        }
-    ));
-
-    set_graphics_layer(&mut server, pane_id, vec![1, 2, 3]);
+    // The pane app already asked for SGR pixel mode, so pixel reports are due to
+    // it immediately. Waiting for a graphics layer used to leave such an app with
+    // no mouse at all: once a terminal is in pixel mode it stops accepting the
+    // cell reports that would otherwise have been the fallback, and the encoder
+    // drops every event it cannot express in pixels.
     server.stream_host_mouse_capture_mode();
     assert!(matches!(
         read_server_message(control_rx.recv_timeout(Duration::from_millis(100)).unwrap()),
@@ -256,6 +251,11 @@ async fn pixel_mouse_activation_requires_graphics_demand_not_direct_transport() 
             sgr_pixels: true
         }
     ));
+
+    // Installing a layer changes nothing: the mode already follows the app.
+    set_graphics_layer(&mut server, pane_id, vec![1, 2, 3]);
+    server.stream_host_mouse_capture_mode();
+    assert!(control_rx.recv_timeout(Duration::from_millis(100)).is_err());
 }
 
 #[tokio::test]

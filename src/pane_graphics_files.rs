@@ -35,9 +35,14 @@ pub(crate) struct Lease {
 #[derive(Debug)]
 struct LeaseInner {
     path: PathBuf,
-    file: File,
-    generation: Arc<Generation>,
-    metadata: fs::Metadata,
+    /// `None` when the frame file lives on the attached client's machine.
+    ///
+    /// A client that renders locally writes frames into its own directory, so
+    /// this process can neither open nor read them; it forwards the path and the
+    /// client validates the file before handing it to its terminal.
+    file: Option<File>,
+    generation: Option<Arc<Generation>>,
+    metadata: Option<fs::Metadata>,
     len: usize,
     fingerprint: u64,
 }
@@ -72,13 +77,32 @@ impl FileStore {
         Ok(Lease {
             inner: Arc::new(LeaseInner {
                 path: path.to_owned(),
-                file,
-                generation,
-                metadata,
+                file: Some(file),
+                generation: Some(generation),
+                metadata: Some(metadata),
                 len: expected_len,
                 fingerprint,
             }),
         })
+    }
+
+    /// Takes a lease on a frame file that lives on the attached client.
+    ///
+    /// The caller must have already confirmed that `path` sits inside the
+    /// directory that client declared, which is the only containment check this
+    /// process can make about a filesystem it cannot see.
+    pub(crate) fn lease_client_local(&self, path: &Path, expected_len: usize) -> Lease {
+        let fingerprint = self.next_fingerprint.fetch_add(1, Ordering::Relaxed);
+        Lease {
+            inner: Arc::new(LeaseInner {
+                path: path.to_owned(),
+                file: None,
+                generation: None,
+                metadata: None,
+                len: expected_len,
+                fingerprint,
+            }),
+        }
     }
 
     fn generation(&self) -> io::Result<Arc<Generation>> {
@@ -115,19 +139,30 @@ impl Lease {
         self.inner.fingerprint
     }
 
+    /// True when the frame file lives on the client rather than on this machine.
+    pub(crate) fn is_client_local(&self) -> bool {
+        self.inner.file.is_none()
+    }
+
     pub(crate) fn copy_rgba(&self) -> io::Result<Vec<u8>> {
         let _keep_generation_alive = &self.inner.generation;
-        validate_path_identity(&self.inner.path, &self.inner.metadata)?;
+        let (Some(file), Some(metadata)) = (&self.inner.file, &self.inner.metadata) else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "frame file lives on the client and cannot be read here",
+            ));
+        };
+        validate_path_identity(&self.inner.path, metadata)?;
         let mut data = vec![0; self.inner.len];
-        read_exact_at(&self.inner.file, &mut data)?;
-        if has_byte_at(&self.inner.file, self.inner.len as u64)? {
+        read_exact_at(file, &mut data)?;
+        if has_byte_at(file, self.inner.len as u64)? {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "frame length changed while leased",
             ));
         }
-        validate_metadata(&self.inner.file.metadata()?, self.inner.len)?;
-        validate_path_identity(&self.inner.path, &self.inner.metadata)?;
+        validate_metadata(&file.metadata()?, self.inner.len)?;
+        validate_path_identity(&self.inner.path, metadata)?;
         Ok(data)
     }
 }
@@ -195,6 +230,52 @@ fn create_generation(base: &Path) -> io::Result<Generation> {
         validate_directory(&source)?;
         Ok(Generation { root, source })
     }
+}
+
+/// Creates the directory a locally rendering client offers to frame producers.
+///
+/// A client that renders on its own machine needs a place its producers can
+/// write frames to and that its terminal can read back. The server only ever
+/// learns this path, so the directory is created here with the same private
+/// permissions the server uses for its own frame storage.
+#[cfg(unix)]
+pub(crate) fn create_client_frame_directory() -> io::Result<PathBuf> {
+    let base = runtime_base().with_file_name(format!("herdr-client-frames-{}", effective_uid()));
+    fs::create_dir_all(&base)?;
+    fs::set_permissions(&base, fs::Permissions::from_mode(DIRECTORY_MODE))?;
+    validate_directory(&base)?;
+    let root = base.join(format!("client-{}", std::process::id()));
+    if root.exists() {
+        fs::remove_dir_all(&root)?;
+    }
+    fs::create_dir(&root)?;
+    fs::set_permissions(&root, fs::Permissions::from_mode(DIRECTORY_MODE))?;
+    validate_directory(&root)?;
+    Ok(root)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn create_client_frame_directory() -> io::Result<PathBuf> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "client-side frame files require Unix",
+    ))
+}
+
+/// Whether `path` names a plain file directly inside `directory`.
+///
+/// This is the only containment check the server can make for a frame file it
+/// cannot open, so it is deliberately strict: no traversal, no nesting.
+pub(crate) fn path_is_inside(path: &Path, directory: &Path) -> bool {
+    if path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::CurDir
+        )
+    }) {
+        return false;
+    }
+    path.parent() == Some(directory) && path.file_name().is_some()
 }
 
 fn runtime_base() -> PathBuf {

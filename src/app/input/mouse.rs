@@ -1758,20 +1758,31 @@ impl AppState {
         let column = mouse.column.saturating_sub(inner.x);
         let row = mouse.row.saturating_sub(inner.y);
         let cell = crate::input::mouse::Position::Cell { column, row };
-        let Some(host) = self.host_mouse_pixels else {
-            return Some(cell);
-        };
         let wants_pixels = runtime.sgr_pixel_mouse_enabled();
         if !wants_pixels {
             return Some(cell);
         }
-        let Some((width_px, height_px)) = runtime.pixel_size() else {
-            return Some(cell);
-        };
-        Some(
-            host.pane_position(inner, width_px, height_px)
-                .unwrap_or(cell),
-        )
+        if let Some(host) = self.host_mouse_pixels {
+            if let Some((width_px, height_px)) = runtime.pixel_size() {
+                return Some(
+                    host.pane_position(inner, width_px, height_px)
+                        .unwrap_or(cell),
+                );
+            }
+        }
+        // An app in SGR pixel mode has stopped accepting cell reports, so handing
+        // the encoder a cell position drops the event entirely. When the host sent
+        // no pixel coordinates -- a client that never enabled 1016, or one whose
+        // report failed validation -- aim at the middle of the cell instead, which
+        // keeps the event and lands it inside the character the pointer is over.
+        let cell_size = self.host_cell_size;
+        if cell_size.width_px > 0 && cell_size.height_px > 0 {
+            return Some(crate::input::mouse::Position::Pixels {
+                x: u32::from(column) * cell_size.width_px + cell_size.width_px / 2,
+                y: u32::from(row) * cell_size.height_px + cell_size.height_px / 2,
+            });
+        }
+        Some(cell)
     }
 
     pub(super) fn forward_pane_mouse_button(
@@ -2839,7 +2850,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ordinary_cell_mouse_downgrades_pixel_mode_to_cell_coordinates() {
+    async fn ordinary_cell_mouse_reports_cell_centre_in_pixel_mode() {
         let mut app = app_for_mouse_test();
         let mut ws = Workspace::test_new("test");
         let pane_id = ws.tabs[0].root_pane;
@@ -2876,9 +2887,13 @@ mod tests {
             info.inner_rect.y + 3,
         ));
 
+        // The app asked for pixel reports, so cell indices would be read as pixel
+        // coordinates and collapse every event into the top-left corner. Aim at
+        // the middle of the cell the pointer is over instead: cell (2, 3) with a
+        // 10x20 cell is (25, 70).
         assert_eq!(
             input_rx.try_recv().expect("forwarded mouse motion"),
-            Bytes::from_static(b"\x1b[<35;3;4M")
+            Bytes::from_static(b"\x1b[<35;25;70M")
         );
         assert!(input_rx.try_recv().is_err());
     }
@@ -2917,6 +2932,9 @@ mod tests {
             .state
             .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
             .unwrap();
+        // Without a pane pixel size the exact sub-cell position cannot be derived,
+        // but the app is in pixel mode and cell indices would mislead it, so the
+        // centre of the cell stands in.
         assert_eq!(runtime.pixel_size(), None);
         assert_eq!(
             app.state.pane_mouse_position(
@@ -2924,7 +2942,7 @@ mod tests {
                 inner,
                 mouse(MouseEventKind::Moved, inner.x + 2, inner.y + 3),
             ),
-            Some(crate::input::mouse::Position::Cell { column: 2, row: 3 })
+            Some(crate::input::mouse::Position::Pixels { x: 25, y: 70 })
         );
         runtime.resize(inner.height, inner.width, 10, 20);
         let runtime = app

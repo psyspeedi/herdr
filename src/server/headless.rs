@@ -1161,6 +1161,10 @@ impl HeadlessServer {
     }
 
     fn sync_foreground_client_state(&mut self) {
+        self.app.client_frame_dir = self
+            .foreground_client_id
+            .and_then(|id| self.clients.get(&id))
+            .and_then(|client| client.local_frame_dir.clone());
         self.app.direct_graphics_available = self.direct_graphics_available();
         self.app.pixel_mouse_available = self.foreground_client_id.is_some_and(|id| {
             self.clients
@@ -1584,7 +1588,13 @@ impl HeadlessServer {
         self.app_client_count() == 1
             && self.foreground_client_id.is_some_and(|id| {
                 self.clients.get(&id).is_some_and(|client| {
-                    client.is_full_app_client() && client.writer.is_some() && client.direct_graphics
+                    client.is_full_app_client()
+                        && client.writer.is_some()
+                        // A client that offers its own frame directory reads those
+                        // files itself, so the transport restrictions that gate
+                        // `direct_graphics` do not apply to it: nothing about the
+                        // path has to be reachable from this machine.
+                        && (client.direct_graphics || client.local_frame_dir.is_some())
                 })
             })
     }
@@ -3045,7 +3055,15 @@ impl HeadlessServer {
                     Some(writer),
                 );
                 connection.direct_graphics = direct_graphics;
-                connection.pixel_mouse = direct_graphics;
+                // Direct graphics needs the frame file to sit on the machine the
+                // terminal reads from, which is why a remote or multiplexed client
+                // cannot have it. Pixel mouse carries no such requirement: SGR 1016
+                // reports travel as ordinary escape sequences and survive the hop.
+                // Gate it on the client having reported a real cell size instead, so
+                // a pane app that asks for pixel coordinates gets them rather than
+                // cell indices it would read as pixels.
+                connection.pixel_mouse =
+                    direct_graphics || (cell_width_px > 0 && cell_height_px > 0);
                 self.clients.insert(client_id, connection);
                 if !direct_attach_requested {
                     self.foreground_client_id = Some(client_id);
@@ -3111,7 +3129,12 @@ impl HeadlessServer {
                             && cell.width_px == geometry.width_px / u32::from(geometry.cols)
                             && cell.height_px == geometry.height_px / u32::from(geometry.rows)
                     });
-                if !valid || self.handoff_in_progress || !self.focused_pane_graphics_demand() {
+                // A pixel report is dropped outright when it fails validation, so
+                // gating it on the focused pane drawing graphics left apps that ask
+                // for 1016 without the pane graphics API receiving no mouse input at
+                // all: the terminal has already switched to pixel reports by then,
+                // and there are no cell reports left to fall back to.
+                if !valid || self.handoff_in_progress {
                     return false;
                 }
                 let foreground_changed = self.promote_client_to_foreground(client_id);
@@ -3121,6 +3144,19 @@ impl HeadlessServer {
                 self.app
                     .route_client_pixel_mouse(client_id, &data, geometry)
                     || foreground_changed
+            }
+            ServerEvent::ClientLocalFrameDirectory { client_id, path } => {
+                // Trust is bounded: the path is only ever compared against frame
+                // paths a producer submits, and the client re-validates the file
+                // before its terminal reads it. Nothing here opens it.
+                let directory = std::path::PathBuf::from(path);
+                if directory.is_absolute() {
+                    if let Some(client) = self.clients.get_mut(&client_id) {
+                        client.local_frame_dir = Some(directory);
+                    }
+                    self.sync_foreground_client_state();
+                }
+                return false;
             }
             ServerEvent::ClientInput { client_id, data } => {
                 if self.handoff_in_progress {
@@ -3979,8 +4015,12 @@ impl HeadlessServer {
             .clients
             .values()
             .any(|client| client.is_full_app_client() && client.pixel_mouse);
+        // SGR 1016 is an input contract, not a drawing one: any pane app that asks
+        // for pixel coordinates needs them, whether or not it also streams graphics
+        // through the pane API. Gating this on graphics left such apps receiving
+        // nothing at all, because a terminal that requested 1016 discards the cell
+        // reports we would otherwise send.
         let sgr_pixels = pixel_mouse_requested
-            && self.focused_pane_graphics_demand()
             && self
                 .app
                 .state
